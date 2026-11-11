@@ -1697,8 +1697,21 @@ const GymCalendar = (() => {
  }
  function review(){const box=document.getElementById('gymCalendarReview');if(!box)return;box.replaceChildren();for(const item of queue().filter(x=>x.candidates?.length)){const p=document.createElement('p');p.textContent='This workout overlaps an existing Gym entry. Link it, or confirm this is a separate workout.';box.appendChild(p);for(const ev of item.candidates){const b=document.createElement('button');b.className='btn btn-secondary btn-sm';b.textContent='Use '+ev.title+' · '+new Date(ev.start).toLocaleString();b.onclick=()=>choose(item.sourceId,ev.id);box.appendChild(b);}const separate=document.createElement('button');separate.className='btn btn-secondary btn-sm';separate.textContent='This is a separate workout';separate.onclick=()=>choose(item.sourceId,null);box.appendChild(separate);}}
  function choose(id,eventId){localStorage.setItem(queueKey,JSON.stringify(queue().map(x=>{if(x.sourceId!==id)return x;const n={...x};delete n.candidates;if(eventId)n.linkEventId=eventId;else n.allowSeparate=true;return n})));refresh();flush();}
- function open(){const c=config();document.getElementById('gymCalendarUrl').value=c.url||'';document.getElementById('gymCalendarKey').value=c.key||'';refresh();}
- function save(){const url=document.getElementById('gymCalendarUrl').value.trim().replace(/\/+$/,''),key=document.getElementById('gymCalendarKey').value.trim();try{const u=new URL(url);if(u.protocol!=='https:'||u.username||u.password||u.search||u.hash)throw Error();}catch{return line('Use the HTTPS Worker address from MyDay Settings.');}localStorage.setItem(configKey,JSON.stringify({url,key}));refresh();flush();}
+ function showCheck(){let el=document.getElementById('gymCalendarCheck');if(!el){el=document.createElement('div');el.className='settings-status';el.id='gymCalendarCheck';document.getElementById('gymCalendarStatus').after(el)}const saved=read('gym.calendar.check',{});el.textContent=saved.text||'Connection not checked yet. A saved configuration is not a verified Google connection.';}
+ function checkLine(text){localStorage.setItem('gym.calendar.check',JSON.stringify({text,at:Date.now()}));showCheck();}
+ async function check(){
+  const c=config();if(!c.url||!c.key){checkLine('Not connected in this browser. Open the connected MyDay page, then Sports > Connect Gym calendar. Do not clear Gym data.');return}
+  checkLine('Checking saved connection with Google Calendar...');
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
+  try{const from=new Date().toISOString(),to=new Date(Date.now()+1000).toISOString();
+   const res=await fetch(c.url+'/api/calendar?'+new URLSearchParams({from,to}),{headers:{'X-App-Key':c.key},signal:controller.signal});const data=await res.json();
+   if(!res.ok)throw Error(data.error||'Calendar check failed ('+res.status+')');
+   if(!Array.isArray(data.events)||!Array.isArray(data.calendars)||!data.calendars.length||data.errors?.length)throw Error('Calendar access was incomplete. Check Google Calendar in MyDay Settings.');
+   checkLine('Google Calendar read access verified at '+new Date().toLocaleString()+'. No event created. Saving a future completed workout will confirm write access.');
+  }catch(e){checkLine('Connection not verified: '+(e.name==='AbortError'?'check timed out. Keep both pages online and try Check connection again':e.message)+'. Your saved workouts and connection details were kept.');}finally{clearTimeout(timer)}
+ }
+ function open(){const c=config();document.getElementById('gymCalendarUrl').value=c.url||'';document.getElementById('gymCalendarKey').value=c.key||'';refresh();let b=document.getElementById('gymCalendarCheckButton');if(!b){b=document.createElement('button');b.id='gymCalendarCheckButton';b.className='btn btn-secondary btn-sm';b.textContent='Check connection';b.onclick=check;document.getElementById('gymCalendarStatus').before(b)}showCheck();}
+ function save(){const url=document.getElementById('gymCalendarUrl').value.trim().replace(/\/+$/,''),key=document.getElementById('gymCalendarKey').value.trim();try{const u=new URL(url);if(u.protocol!=='https:'||u.username||u.password||u.search||u.hash)throw Error();}catch{return line('Use the HTTPS Worker address from MyDay Settings.');}localStorage.setItem(configKey,JSON.stringify({url,key}));checkLine('Configuration saved. Use Check connection to verify Google Calendar access.');refresh();flush();}
  const pairingUrl=new URL(location.href),pairing=pairingUrl.searchParams.get('connectCalendar')==='1',pairingUntil=Date.now()+120000;
  if(pairing){
   pairingUrl.searchParams.delete('connectCalendar');window.history.replaceState(null,'',pairingUrl.toString());
@@ -1709,14 +1722,16 @@ const GymCalendar = (() => {
    if(url!=='https://calorie-tracker.matthias-homan.workers.dev'||typeof key!=='string'||!key||key.length>1000)return;
    received=true;window.removeEventListener('message',accept);
    localStorage.setItem(configKey,JSON.stringify({url,key}));
-   const note=document.createElement('p');note.className='settings-status';note.textContent='MyDay calendar connected. Future saved workouts will sync; old history is not backfilled.';note.style.cssText='padding:16px;background:var(--surface);position:relative;z-index:2';document.body.prepend(note);refresh();flush();
+   window.opener.postMessage({type:'gym-calendar-connect-saved'},'https://mydayappmh.github.io');
+   checkLine('Connection received from MyDay. Checking Google Calendar access...');
+   const note=document.createElement('p');note.className='settings-status';note.textContent='Connection details received from MyDay. Open Gym Settings > Check connection to verify access. Old history is not backfilled.';note.style.cssText='padding:16px;background:var(--surface);position:relative;z-index:2';document.body.prepend(note);refresh();check();flush();
   };
   window.addEventListener('message',accept);
-  if(window.opener)window.opener.postMessage({type:'gym-calendar-connect-request'},'https://mydayappmh.github.io');
-  else setTimeout(()=>{const note=document.createElement('p');note.textContent='Open MyDay in Chrome, Sports, then Connect Gym calendar. If the app opens separately, use Calendar in Gym Settings instead.';note.style.padding='16px';document.body.prepend(note)},0);
+  if(window.opener){window.opener.postMessage({type:'gym-calendar-connect-request'},'https://mydayappmh.github.io');setTimeout(()=>{if(!received)checkLine('Connection not received from MyDay. Use both pages in the same Chrome browser. Open the MyDay page that already shows your meetings, then Sports > Connect Gym calendar. Your Gym data has not changed.')},15000);}
+  else setTimeout(()=>{checkLine('No connection received: Gym opened without its MyDay tab. Use both pages in the same Chrome browser. Existing workout data and connection details are unchanged.');const note=document.createElement('p');note.textContent='Open MyDay in Chrome, Sports, then Connect Gym calendar. If the app opens separately, use Calendar in Gym Settings instead.';note.style.padding='16px';document.body.prepend(note)},0);
  }
  window.addEventListener('online',flush);document.addEventListener('visibilitychange',()=>{if(!document.hidden)flush()});setTimeout(flush,0);
- return {enqueue,flush,open,save,refresh};
+ return {enqueue,flush,open,save,refresh,check};
 })();
 
 function getWorkoutHistory() {
@@ -2452,4 +2467,3 @@ function deletePhysio(i) {
   renderPhysio();
   if (ws.active) renderActiveWorkout();
 }
-
