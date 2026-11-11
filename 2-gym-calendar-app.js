@@ -1704,32 +1704,38 @@ const GymCalendar = (() => {
   checkLine('Checking saved connection with Google Calendar...');
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
   try{const from=new Date().toISOString(),to=new Date(Date.now()+1000).toISOString();
-   const res=await fetch(c.url+'/api/calendar?'+new URLSearchParams({from,to}),{headers:{'X-App-Key':c.key},signal:controller.signal});const data=await res.json();
+   const scoped=c.key.startsWith('gym2.');const res=await fetch(c.url+(scoped?'/api/gym/status':'/api/calendar?'+new URLSearchParams({from,to})),{headers:{'X-App-Key':c.key},signal:controller.signal});const data=await res.json();
    if(!res.ok)throw Error(data.error||'Calendar check failed ('+res.status+')');
-   if(!Array.isArray(data.events)||!Array.isArray(data.calendars)||!data.calendars.length||data.errors?.length)throw Error('Calendar access was incomplete. Check Google Calendar in MyDay Settings.');
+   if(scoped?data.connected!==true:(!Array.isArray(data.events)||!Array.isArray(data.calendars)||!data.calendars.length||data.errors?.length))throw Error('Calendar access was incomplete. Check Google Calendar in MyDay Settings.');
    checkLine('Google Calendar read access verified at '+new Date().toLocaleString()+'. No event created. Saving a future completed workout will confirm write access.');
   }catch(e){checkLine('Connection not verified: '+(e.name==='AbortError'?'check timed out. Keep both pages online and try Check connection again':e.message)+'. Your saved workouts and connection details were kept.');}finally{clearTimeout(timer)}
  }
  function open(){const c=config();document.getElementById('gymCalendarUrl').value=c.url||'';document.getElementById('gymCalendarKey').value=c.key||'';refresh();let b=document.getElementById('gymCalendarCheckButton');if(!b){b=document.createElement('button');b.id='gymCalendarCheckButton';b.className='btn btn-secondary btn-sm';b.textContent='Check connection';b.onclick=check;document.getElementById('gymCalendarStatus').before(b)}showCheck();}
  function save(){const url=document.getElementById('gymCalendarUrl').value.trim().replace(/\/+$/,''),key=document.getElementById('gymCalendarKey').value.trim();try{const u=new URL(url);if(u.protocol!=='https:'||u.username||u.password||u.search||u.hash)throw Error();}catch{return line('Use the HTTPS Worker address from MyDay Settings.');}localStorage.setItem(configKey,JSON.stringify({url,key}));checkLine('Configuration saved. Use Check connection to verify Google Calendar access.');refresh();flush();}
- const pairingUrl=new URL(location.href),pairing=pairingUrl.searchParams.get('connectCalendar')==='1',pairingUntil=Date.now()+120000;
- if(pairing){
-  pairingUrl.searchParams.delete('connectCalendar');window.history.replaceState(null,'',pairingUrl.toString());
-  let received=false;
-  const accept=async e=>{
-   if(received||Date.now()>pairingUntil||e.origin!=='https://mydayappmh.github.io'||e.source!==window.opener||e.data?.type!=='myday-calendar-connect')return;
-   const {url,key}=e.data;
-   if(url!=='https://calorie-tracker.matthias-homan.workers.dev'||typeof key!=='string'||!key||key.length>1000)return;
-   received=true;window.removeEventListener('message',accept);
-   localStorage.setItem(configKey,JSON.stringify({url,key}));
-   window.opener.postMessage({type:'gym-calendar-connect-saved'},'https://mydayappmh.github.io');
-   checkLine('Connection received from MyDay. Checking Google Calendar access...');
-   const note=document.createElement('p');note.className='settings-status';note.textContent='Connection details received from MyDay. Open Gym Settings > Check connection to verify access. Old history is not backfilled.';note.style.cssText='padding:16px;background:var(--surface);position:relative;z-index:2';document.body.prepend(note);refresh();check();flush();
-  };
-  window.addEventListener('message',accept);
-  if(window.opener){window.opener.postMessage({type:'gym-calendar-connect-request'},'https://mydayappmh.github.io');setTimeout(()=>{if(!received)checkLine('Connection not received from MyDay. Use both pages in the same Chrome browser. Open the MyDay page that already shows your meetings, then Sports > Connect Gym calendar. Your Gym data has not changed.')},15000);}
-  else setTimeout(()=>{checkLine('No connection received: Gym opened without its MyDay tab. Use both pages in the same Chrome browser. Existing workout data and connection details are unchanged.');const note=document.createElement('p');note.textContent='Open MyDay in Chrome, Sports, then Connect Gym calendar. If the app opens separately, use Calendar in Gym Settings instead.';note.style.padding='16px';document.body.prepend(note)},0);
+ // Pairing is independent of window.opener, installed-app handoff and popup timing.
+ let pairingBusy=false;
+ function receivePairing(input=location.href){
+ const pairingUrl=new URL(input);if(pairingUrl.origin!==location.origin||!pairingUrl.pathname.startsWith('/gym-app/'))return;
+ const pairParams=new URLSearchParams(pairingUrl.hash.slice(1)),pair=pairParams.get('gymPair');
+ if(pair&&!pairingBusy){
+  pairingBusy=true;pairParams.delete('gymPair');pairingUrl.hash=pairParams.toString();history.replaceState(null,'',pairingUrl.toString());
+  setTimeout(async()=>{
+   openSettings();checkLine('Receiving the secure connection from MyDay...');
+   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
+   try{
+    const url='https://calorie-tracker.matthias-homan.workers.dev';
+    const res=await fetch(url+'/api/gym/redeem',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pair}),signal:controller.signal});
+    const data=await res.json();if(!res.ok)throw Error(data.error||'Connection transfer failed');
+    if(typeof data.key!=='string'||!data.key.startsWith('gym2.')||data.scope!=='gym-completion')throw Error('Connection service returned an invalid Gym credential');
+    localStorage.setItem(configKey,JSON.stringify({url,key:data.key,scope:data.scope,expiresAt:data.expiresAt}));
+    open();checkLine('Gym connection saved. Checking Google Calendar access...');await check();flush();
+   }catch(e){checkLine('Connection not received: '+(e.name==='AbortError'?'transfer timed out':e.message)+'. Existing workouts and any previous connection were kept.');}
+   finally{clearTimeout(timer);pairingBusy=false}
+  },0);
  }
+ }
+ receivePairing();window.addEventListener('hashchange',()=>receivePairing());
+ if('launchQueue' in window)window.launchQueue.setConsumer(launch=>{if(launch.targetURL)receivePairing(launch.targetURL)});
  window.addEventListener('online',flush);document.addEventListener('visibilitychange',()=>{if(!document.hidden)flush()});setTimeout(flush,0);
  return {enqueue,flush,open,save,refresh,check};
 })();
