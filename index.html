@@ -1521,6 +1521,7 @@
       <div style="flex:1;">
         <div style="font-family:var(--font-mono);font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text3)" id="awDayLabel">Day 1 — Chest</div>
         <div style="font-family:var(--font-mono);font-size:22px;font-weight:500;color:var(--accent);margin-top:2px" id="awTimer">0:00</div>
+        <div id="awWake" style="font-family:var(--font-mono);font-size:10px;color:var(--text3);margin-top:2px"></div>
       </div>
       <div style="text-align:right;">
         <div style="font-size:11px;color:var(--text3)">Sets done</div>
@@ -2795,6 +2796,8 @@ function selectWorkoutDay(num) {
     c.classList.toggle('selected', parseInt(c.dataset.day) === num);
   });
   renderExercises();
+  const wx = document.getElementById('workoutExercises');
+  if (wx) wx.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function renderExercises() {
@@ -2823,6 +2826,7 @@ function renderExercises() {
   const catColors = { BLS: 'var(--accent)', SPORT: 'var(--green)' };
 
   el.innerHTML = `
+    <button class="btn btn-primary" style="width:100%;margin-bottom:10px" onclick="startWorkout(${day.num})">▶ Start Day ${day.num} — ${day.name}</button>
     <div class="card">
       <div class="card-title">Day ${day.num} · ${day.name} · ${eq.charAt(0).toUpperCase()+eq.slice(1)}</div>
       ${categories.map(group => `
@@ -2850,6 +2854,17 @@ function renderExercises() {
     </div>
     <button class="btn btn-primary" onclick="startWorkout(${day.num})">▶ Start Workout</button>
   `;
+}
+
+function updateWakeIndicator() {
+  const el = document.getElementById('awWake');
+  if (!el) return;
+  const summaryOpen = document.getElementById('workoutSummaryModal').classList.contains('open');
+  if (!ws.active || summaryOpen) { el.textContent = ''; return; }
+  const held = ws.wakeLock && !ws.wakeLock.released;
+  el.innerHTML = held
+    ? '<span style="color:var(--green)">&#9679;</span> screen stays on'
+    : '<span style="color:var(--amber)">&#9679;</span> screen may dim';
 }
 
 function startWorkout(dayNum) {
@@ -2907,17 +2922,19 @@ function startWorkout(dayNum) {
   ws.startTime = Date.now();
 
   // Wake lock
-  if (navigator.wakeLock) {
+  const requestWake = () => {
+    if (!navigator.wakeLock) { updateWakeIndicator(); return; }
     navigator.wakeLock.request('screen').then(lock => {
       ws.wakeLock = lock;
-      // Re-acquire wake lock when page becomes visible again (system releases on hide)
-      document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && ws.active && navigator.wakeLock) {
-          navigator.wakeLock.request('screen').then(l => { ws.wakeLock = l; }).catch(() => {});
-        }
-      }, { once: false });
-    }).catch(() => {});
-  }
+      lock.addEventListener('release', updateWakeIndicator);
+      updateWakeIndicator();
+    }).catch(() => updateWakeIndicator());
+  };
+  requestWake();
+  // Re-acquire wake lock when page becomes visible again (system releases on hide)
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && ws.active) requestWake();
+  }, { once: false });
 
   // Show overlay
   document.getElementById('awDayLabel').textContent = `Day ${dayNum} — ${day.name} · ${eq}`;
@@ -3262,6 +3279,7 @@ function abortWorkout() {
   clearInterval(ws.restInterval);
   if (ws.wakeLock) { ws.wakeLock.release(); ws.wakeLock = null; }
   ws.active = false;
+  updateWakeIndicator();
   document.getElementById('activeWorkoutOverlay').style.display = 'none';
   document.body.style.overflow = '';
 }
@@ -3270,6 +3288,7 @@ function finishWorkout() {
   clearInterval(ws.timerInterval);
   clearInterval(ws.restInterval);
   if (ws.wakeLock) { ws.wakeLock.release(); ws.wakeLock = null; }
+  updateWakeIndicator();
 
   const durationSec = Math.floor((Date.now() - ws.startTime) / 1000);
   const allSets     = ws.exercises.flatMap(ex => ex.sets.filter(s => s.logged));
