@@ -1098,9 +1098,11 @@ function renderWorkoutDays() {
     return `
       <div class="workout-day-card" data-day="${d.num}" onclick="selectWorkoutDay(${d.num})">
         <div class="workout-day-num">Day ${d.num}</div>
-        <div class="workout-day-name">${d.name}</div>
-        <div class="workout-day-sub">${d.sub}</div>
-        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);margin-top:5px">Last: ${lastDate}</div>
+        <div class="workout-day-main">
+          <div class="workout-day-name">${d.name}</div>
+          <div class="workout-day-last">Last: ${lastDate}</div>
+        </div>
+        <div class="workout-day-chevron" aria-hidden="true">›</div>
       </div>
     `;
   }).join('');
